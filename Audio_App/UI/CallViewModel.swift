@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import Combine
+import WebRTC
 
 enum CallState {
     case idle, connecting, searching, matched, inCall, ended
@@ -27,29 +28,27 @@ final class CallViewModel: ObservableObject {
             
             self.callState = .connecting
             
-            // ✅ Connect signaling first
-            SignalingManager.shared.connect()
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                // ✅ Setup peer connection
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.callState = .searching }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.callState = .matched }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                self.callState = .inCall
+                self.setupAudioSession()
+                self.startAudioEngine()
+                
+                // Start WebRTC
                 WebRTCManager.shared.setupPeerConnection()
                 WebRTCManager.shared.startLocalAudio()
                 
-                // ✅ Create offer
-                WebRTCManager.shared.createOffer()
-            }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                self.callState = .inCall
+                // Connect signaling
+                SignalingManager.shared.connect()
             }
         }
     }
-
     
     // MARK: - End Call
     func endCall() {
         stopAudio()
-        // CallManager.shared.end()  <-- uncomment if CallKit is ready
+        WebRTCManager.shared.closeConnection()
         callState = .ended
         isMuted = false
         isSpeakerOn = false
@@ -62,14 +61,14 @@ final class CallViewModel: ObservableObject {
     // MARK: - Cancel Search
     func cancelSearch() {
         stopAudio()
+        WebRTCManager.shared.closeConnection()
         callState = .idle
-        // CallManager.shared.end() <-- if using CallKit
     }
     
     // MARK: - Mute / Speaker
     func toggleMute() {
         isMuted.toggle()
-        audioEngine.inputNode.volume = isMuted ? 0 : 1
+        WebRTCManager.shared.localAudioTrack?.isEnabled = !isMuted
     }
     
     func toggleSpeaker() {
