@@ -9,7 +9,7 @@ final class SignalingManager: ObservableObject {
     private var webSocket: URLSessionWebSocketTask?
     
     func connect() {
-        let url = URL(string: "wss://8a969c6944c6.ngrok-free.app")!
+        let url = URL(string: "wss://cf66ce8b0984.ngrok-free.app")!
         webSocket = URLSession.shared.webSocketTask(with: url)
         webSocket?.resume()
         listen()
