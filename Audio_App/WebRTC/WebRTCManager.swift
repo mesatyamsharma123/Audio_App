@@ -1,153 +1,151 @@
 import Foundation
 import WebRTC
-import AVFoundation
 
 final class WebRTCManager: NSObject, RTCPeerConnectionDelegate {
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
     
-    static let shared = WebRTCManager()
-    
-    private var peerConnection: RTCPeerConnection?
-    private var factory: RTCPeerConnectionFactory!
-    
-    private(set) var localAudioTrack: RTCAudioTrack?
-    private(set) var remoteAudioTrack: RTCAudioTrack?
-    
-    override init() {
-        super.init()
-        RTCInitializeSSL()
-        factory = RTCPeerConnectionFactory()
     }
     
-    // MARK: - Peer Connection
+
+    static let shared = WebRTCManager()
+
+    private var peerConnection: RTCPeerConnection?
+    private let factory = RTCPeerConnectionFactory()
+
+    private(set) var localAudioTrack: RTCAudioTrack?
+    private(set) var remoteAudioTrack: RTCAudioTrack?
+
+    @MainActor
     func setupPeerConnection() {
         let config = RTCConfiguration()
         config.sdpSemantics = .unifiedPlan
         config.iceServers = [
             RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])
         ]
-        
-        let constraints = RTCMediaConstraints(
-            mandatoryConstraints: nil,
-            optionalConstraints: ["DtlsSrtpKeyAgreement": "true"]
+
+        peerConnection = factory.peerConnection(
+            with: config,
+            constraints: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil),
+            delegate: self
         )
-        
-        peerConnection = factory.peerConnection(with: config, constraints: constraints, delegate: self)
-        print("✅ PeerConnection created")
+
+        addLocalAudioTrack()
     }
-    
-    // MARK: - Local Audio
-    func startLocalAudio() {
-        let audioSource = factory.audioSource(
-            with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-        )
-        localAudioTrack = factory.audioTrack(with: audioSource, trackId: "audio0")
-        
-        if let track = localAudioTrack {
-            peerConnection?.add(track, streamIds: ["stream0"])
-            print("✅ Local audio track added")
+
+    @MainActor
+    private func addLocalAudioTrack() {
+        let source = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
+        localAudioTrack = factory.audioTrack(with: source, trackId: "audio0")
+        peerConnection?.add(localAudioTrack!, streamIds: ["stream0"])
+    }
+
+    @MainActor
+    func createOffer() async throws {
+        guard let peerConnection else { return }
+        // Create offer
+        let sdp = try await peerConnection.offer(for: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
+        // Set local description
+        try await peerConnection.setLocalDescription(sdp)
+        // Send via signaling
+        try await SignalingManager.shared.sendSDP(sdp)
+    }
+
+    // Convenience wrappers for existing call sites
+    func createOfferSync() {
+        Task { @MainActor in
+            try? await self.createOffer()
         }
     }
-    
-    // MARK: - Offer / Answer
-    func createOffer() {
-        let constraints = RTCMediaConstraints(
-            mandatoryConstraints: ["OfferToReceiveAudio": "true"],
-            optionalConstraints: nil
-        )
-        
-        peerConnection?.offer(for: constraints, completionHandler: { [weak self] sdp, error in
-            guard let self = self, let sdp = sdp else {
-                print("❌ Offer failed:", error?.localizedDescription ?? "unknown error")
-                return
-            }
-            self.peerConnection?.setLocalDescription(sdp, completionHandler: { error in
-                if let error = error {
-                    print("❌ Failed to set local description:", error)
-                } else {
-                    print("✅ Local SDP set")
-                    SignalingManager.shared.sendSDP(sdp)
-                }
-            })
-        })
+
+    @MainActor
+    func createAnswer() async throws {
+        guard let peerConnection else { return }
+        let sdp = try await peerConnection.answer(for: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
+        try await peerConnection.setLocalDescription(sdp)
+        try await SignalingManager.shared.sendSDP(sdp)
     }
-    
-    func createAnswer() {
-        let constraints = RTCMediaConstraints(
-            mandatoryConstraints: ["OfferToReceiveAudio": "true"],
-            optionalConstraints: nil
-        )
-        
-        peerConnection?.answer(for: constraints, completionHandler: { [weak self] sdp, error in
-            guard let self = self, let sdp = sdp else {
-                print("❌ Answer failed:", error?.localizedDescription ?? "unknown error")
-                return
-            }
-            self.peerConnection?.setLocalDescription(sdp, completionHandler: { error in
-                if let error = error {
-                    print("❌ Failed to set local description:", error)
-                } else {
-                    print("✅ Local SDP set (answer)")
-                    SignalingManager.shared.sendSDP(sdp)
-                }
-            })
-        })
+
+    // Convenience wrappers for existing call sites
+    func createAnswerSync() {
+        Task { @MainActor in
+            try? await self.createAnswer()
+        }
     }
-    
-    // MARK: - Remote SDP
-    func setRemoteDescription(_ sdp: RTCSessionDescription) {
-        peerConnection?.setRemoteDescription(sdp, completionHandler: { error in
-            if let error = error {
-                print("❌ Failed to set remote SDP:", error)
-            } else {
-                print("✅ Remote SDP set")
-            }
-        })
+
+    @MainActor
+    func setRemoteDescription(_ sdp: RTCSessionDescription) async throws {
+        guard let peerConnection else { return }
+        try await peerConnection.setRemoteDescription(sdp)
     }
-    
-    // MARK: - ICE Candidate
-    func addIceCandidate(_ candidate: RTCIceCandidate) {
-        peerConnection?.add(candidate)
+
+    @MainActor
+    func addIceCandidate(_ candidate: RTCIceCandidate) async throws {
+        guard let peerConnection else { return }
+        try await peerConnection.add(candidate)
     }
-    
-    // MARK: - Close
+
+    // Convenience for legacy call sites that are not async yet
+    func addIceCandidateSync(_ candidate: RTCIceCandidate) {
+        Task { @MainActor in
+            try? await self.addIceCandidate(candidate)
+        }
+    }
+
+    @MainActor
     func closeConnection() {
         peerConnection?.close()
         peerConnection = nil
-        localAudioTrack = nil
-        remoteAudioTrack = nil
     }
-    
-    // MARK: - RTCPeerConnectionDelegate
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
-    
+
+    // MARK: - Delegate
+    func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
+        // Handle renegotiation if needed
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
+        // Observe signaling state changes if needed
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
+        // Observe ICE connection state changes if needed
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
+        // Observe overall peer connection state changes if needed
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange localCandidate: RTCIceCandidate?) {
+        // Deprecated in some versions; keep for protocol completeness where required
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {
+        // Handle removed ICE candidates if needed
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
+        // Handle opened data channel if using data channels
+    }
+
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
-        print("✅ Remote stream received")
-        if let audioTrack = stream.audioTracks.first {
-            self.remoteAudioTrack = audioTrack
-            audioTrack.isEnabled = true
-            print("✅ Remote audio track enabled")
+        // Unified Plan typically uses transceivers; stream callbacks may still occur
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
+        // Handle removed media stream if needed
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection,
+                        didAdd rtpReceiver: RTCRtpReceiver,
+                        streams: [RTCMediaStream]) {
+
+        if let track = rtpReceiver.track as? RTCAudioTrack {
+            remoteAudioTrack = track
+            track.isEnabled = true
         }
     }
-    
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
-        print("❌ Remote stream removed")
-        self.remoteAudioTrack = nil
-    }
-    
-    func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
-    
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
-        print("ICE state:", newState.rawValue)
-    }
-    
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
-    
-    func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        print("✅ ICE candidate generated:", candidate.sdp)
+
+    func peerConnection(_ peerConnection: RTCPeerConnection,
+                        didGenerate candidate: RTCIceCandidate) {
         SignalingManager.shared.sendCandidate(candidate)
     }
-    
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
-    
-    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
 }

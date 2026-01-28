@@ -1,107 +1,112 @@
 import Foundation
 import AVFoundation
 import Combine
-import WebRTC
 
 enum CallState {
-    case idle, connecting, searching, matched, inCall, ended
+    case idle
+    case inCall
+    case ended
+}
+
+enum CallRole {
+    case caller
+    case callee
 }
 
 final class CallViewModel: ObservableObject {
-    
+
     @Published var callState: CallState = .idle
     @Published var isMuted = false
     @Published var isSpeakerOn = false
     @Published var showPermissionAlert = false
-    
-    private let audioEngine = AVAudioEngine()
-    private let session = AVAudioSession.sharedInstance()
-    
+
+    private let audioSession = AVAudioSession.sharedInstance()
+    private let role: CallRole
+
+    // ✅ SAFE INIT (NO AUDIO / WEBRTC HERE)
+    init(role: CallRole) {
+        self.role = role
+        print("CallViewModel init with role:", role)
+    }
+
     // MARK: - Start Call
     func startCall() {
         requestMicrophonePermission { granted in
             guard granted else {
-                self.showPermissionAlert = true
-                self.callState = .ended
+                DispatchQueue.main.async {
+                    self.showPermissionAlert = true
+                }
                 return
             }
-            
-            self.callState = .connecting
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.callState = .searching }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.callState = .matched }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                self.callState = .inCall
+
+            DispatchQueue.main.async {
                 self.setupAudioSession()
-                self.startAudioEngine()
-                
-                // Start WebRTC
-                WebRTCManager.shared.setupPeerConnection()
-                WebRTCManager.shared.startLocalAudio()
-                
-                // Connect signaling
-                SignalingManager.shared.connect()
+                self.callState = .inCall
+                print("✅ Call started")
             }
         }
     }
-    
+
     // MARK: - End Call
     func endCall() {
-        stopAudio()
-        WebRTCManager.shared.closeConnection()
-        callState = .ended
-        isMuted = false
-        isSpeakerOn = false
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            self.callState = .idle
+        DispatchQueue.main.async {
+            self.callState = .ended
+            self.isMuted = false
+            self.isSpeakerOn = false
+            self.deactivateAudio()
+            print("❌ Call ended")
         }
     }
-    
-    // MARK: - Cancel Search
-    func cancelSearch() {
-        stopAudio()
-        WebRTCManager.shared.closeConnection()
-        callState = .idle
-    }
-    
-    // MARK: - Mute / Speaker
+
+    // MARK: - Controls
     func toggleMute() {
         isMuted.toggle()
-        WebRTCManager.shared.localAudioTrack?.isEnabled = !isMuted
+        print(isMuted ? "🔇 Muted" : "🎙️ Unmuted")
     }
-    
+
     func toggleSpeaker() {
         isSpeakerOn.toggle()
-        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeakerOn ? .speaker : .none)
+        try? audioSession.overrideOutputAudioPort(
+            isSpeakerOn ? .speaker : .none
+        )
     }
-    
-    // MARK: - Audio Helpers
-    private func requestMicrophonePermission(_ completion: @escaping (Bool) -> Void) {
-        switch session.recordPermission {
-        case .granted: completion(true)
-        case .denied: completion(false)
-        case .undetermined:
-            session.requestRecordPermission { granted in
-                DispatchQueue.main.async { completion(granted) }
-            }
-        @unknown default: completion(false)
+
+    // MARK: - Audio
+    private func setupAudioSession() {
+        do {
+            try audioSession.setCategory(
+                .playAndRecord,
+                mode: .voiceChat,
+                options: [.allowBluetooth, .defaultToSpeaker]
+            )
+            try audioSession.setActive(true)
+            print("🔊 Audio session active")
+        } catch {
+            print("❌ Audio session error:", error)
         }
     }
-    
-    private func setupAudioSession() {
-        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
-        try? session.setActive(true)
+
+    private func deactivateAudio() {
+        try? audioSession.setActive(false)
     }
-    
-    private func startAudioEngine() {
-        let input = audioEngine.inputNode
-        audioEngine.connect(input, to: audioEngine.mainMixerNode, format: input.outputFormat(forBus: 0))
-        try? audioEngine.start()
-    }
-    
-    private func stopAudio() {
-        audioEngine.stop()
-        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+
+    // MARK: - Permission
+    private func requestMicrophonePermission(
+        _ completion: @escaping (Bool) -> Void
+    ) {
+        switch audioSession.recordPermission {
+        case .granted:
+            completion(true)
+        case .denied:
+            completion(false)
+        case .undetermined:
+            audioSession.requestRecordPermission { granted in
+                DispatchQueue.main.async {
+                    completion(granted)
+                }
+            }
+        @unknown default:
+            completion(false)
+        }
     }
 }
