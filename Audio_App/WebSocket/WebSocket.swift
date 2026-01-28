@@ -1,6 +1,6 @@
 import Foundation
-import Combine
 import WebRTC
+import Combine
 
 final class SignalingManager: ObservableObject {
     
@@ -9,7 +9,7 @@ final class SignalingManager: ObservableObject {
     private var webSocket: URLSessionWebSocketTask?
     
     func connect() {
-        let url = URL(string: "wss://cf66ce8b0984.ngrok-free.app")!
+        let url = URL(string: "wss://cf66ce8b0984.ngrok-free.app")! // replace with your ngrok URL
         webSocket = URLSession.shared.webSocketTask(with: url)
         webSocket?.resume()
         listen()
@@ -27,11 +27,10 @@ final class SignalingManager: ObservableObject {
             case .failure(let error):
                 print("WebSocket error:", error)
             }
-            self?.listen() // continue listening
+            self?.listen()
         }
     }
     
-    // MARK: - Send Messages
     func sendSDP(_ sdp: RTCSessionDescription) {
         let type = sdp.type == .offer ? "offer" : "answer"
         let message: [String: Any] = ["type": type, "sdp": sdp.sdp]
@@ -53,13 +52,10 @@ final class SignalingManager: ObservableObject {
               let text = String(data: data, encoding: .utf8) else { return }
         
         webSocket?.send(.string(text)) { error in
-            if let error = error {
-                print("WebSocket send error:", error)
-            }
+            if let error = error { print("Send error:", error) }
         }
     }
     
-    // MARK: - Handle Incoming
     private func handleMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

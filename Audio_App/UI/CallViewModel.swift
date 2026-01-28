@@ -25,27 +25,26 @@ final class CallViewModel: ObservableObject {
                 return
             }
             
-            // Start CallKit if you have it
-            // CallManager.shared.start()  <-- uncomment if CallKit is ready
-            
             self.callState = .connecting
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.callState = .searching }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.callState = .matched }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                self.callState = .inCall
-                self.setupAudioSession()
-                self.startAudioEngine()
-                
-                // Start WebRTC
+            // ✅ Connect signaling first
+            SignalingManager.shared.connect()
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                // ✅ Setup peer connection
                 WebRTCManager.shared.setupPeerConnection()
                 WebRTCManager.shared.startLocalAudio()
                 
-                // Connect signaling
-                SignalingManager.shared.connect()
+                // ✅ Create offer
+                WebRTCManager.shared.createOffer()
+            }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                self.callState = .inCall
             }
         }
     }
+
     
     // MARK: - End Call
     func endCall() {
